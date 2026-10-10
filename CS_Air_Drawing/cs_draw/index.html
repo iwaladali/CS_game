@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>CS Air Drawing</title>
+<style>
+body{margin:0;background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;padding:12px;gap:8px}
+canvas{width:min(96vw,calc(82vh*1.333));border-radius:12px;background:#000}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
+button,select{padding:8px 14px;border-radius:8px;border:0;font-size:15px}
+button{background:#3b82f6;color:#fff;cursor:pointer}
+</style></head><body>
+<canvas id="cv" width="800" height="600"></canvas>
+<div class="row">
+ <button id="ch">🎯 New challenge</button><button id="sv">💾 Save PNG (S)</button><button id="cl" style="background:#475569">Clear (C)</button>
+ <select id="camSel"></select><small id="err" style="color:#f87171"></small>
+</div>
+<small>☝️ index finger = draw · ✋ open hand = pause · ✊ hold fist = clear · hover a color at the top to pick it</small>
+<video id="vid" playsinline muted style="display:none"></video>
+<script src="mediapipe/hands.js"></script>
+<script>
+const W=800,H=600,cv=document.getElementById('cv'),c=cv.getContext('2d');
+const vid=document.getElementById('vid'),sel=document.getElementById('camSel'),err=document.getElementById('err');
+const layer=document.createElement('canvas');layer.width=W;layer.height=H;const L=layer.getContext('2d');
+L.lineCap='round';L.lineJoin='round';
+const COLORS=['#ffffff','#f87171','#fb923c','#facc15','#4ade80','#38bdf8','#a78bfa','#f472b6','eraser'];
+const SW=COLORS.map((col,i)=>({col,x:60+i*60,y:42,r:22}));
+let color='#ffffff',size=8,last=null,pos=null,pointFrames=0,fistSince=null,clearedAt=0;
+const WORDS=['House','Cat','Sun','Car','Tree','Robot','Smiley face','Flower','Boat','Laptop','Star','Heart','Fish','Rocket'];
+let challenge=null,chEnd=0;
+
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const isOpen=(lm,t,p)=>dist(lm[t],lm[0])>dist(lm[p],lm[0])*1.1;
+function pose(lm){
+  const o=[isOpen(lm,8,6),isOpen(lm,12,10),isOpen(lm,16,14),isOpen(lm,20,18)],n=o.filter(Boolean).length;
+  if(o[0]&&n===1)return 'point';
+  if(n===0)return 'fist';
+  if(n>=3)return 'palm';
+  return null;
+}
+function clearAll(){L.clearRect(0,0,W,H);last=null;clearedAt=performance.now();}
+function save(){
+  const t=document.createElement('canvas');t.width=W;t.height=H;const x=t.getContext('2d');
+  x.fillStyle='#0f172a';x.fillRect(0,0,W,H);x.drawImage(layer,0,0);
+  const a=document.createElement('a');a.download='air-drawing.png';a.href=t.toDataURL();a.click();
+}
+document.getElementById('cl').onclick=clearAll;document.getElementById('sv').onclick=save;
+document.getElementById('ch').onclick=()=>{challenge=WORDS[Math.random()*WORDS.length|0];chEnd=performance.now()+30000;clearAll();};
+addEventListener('keydown',e=>{if(e.key==='s'||e.key==='S')save();if(e.key==='c'||e.key==='C')clearAll();});
+
+function text(s,x,y,size,col='#fff',al='center'){c.font='bold '+size+'px system-ui';c.textAlign=al;c.lineWidth=5;c.strokeStyle='#000';c.strokeText(s,x,y);c.fillStyle=col;c.fillText(s,x,y);}
+
+function onResults(r){
+  const now=performance.now();
+  c.fillStyle='#0f172a';c.fillRect(0,0,W,H);
+  c.globalAlpha=.3;c.save();c.translate(W,0);c.scale(-1,1);c.drawImage(vid,0,0,W,H);c.restore();c.globalAlpha=1;
+
+  const lm=r.multiHandLandmarks&&r.multiHandLandmarks[0];
+  let p=null,drawing=false;
+  if(lm){
+    p=pose(lm);
+    const tx=(1-lm[8].x)*W,ty=lm[8].y*H;
+    pos=pos?{x:pos.x*.5+tx*.5,y:pos.y*.5+ty*.5}:{x:tx,y:ty}; // smoothing
+    // palette hover
+    const hit=SW.find(s=>Math.hypot(pos.x-s.x,pos.y-s.y)<s.r+6);
+    if(hit&&p==='point'){color=hit.col;last=null;pointFrames=0;}
+    else if(p==='point'&&pos.y>80){
+      pointFrames++;
+      if(pointFrames>=2){
+        if(last){
+          L.globalCompositeOperation=color==='eraser'?'destination-out':'source-over';
+          L.strokeStyle=color==='eraser'?'#000':color;L.lineWidth=color==='eraser'?40:size;
+          L.beginPath();L.moveTo(last.x,last.y);L.lineTo(pos.x,pos.y);L.stroke();
+        }
+        last={x:pos.x,y:pos.y};drawing=true;
+      }
+    }else{last=null;pointFrames=0;}
+    // fist-to-clear
+    if(p==='fist'){fistSince??=now;if(now-fistSince>1200){clearAll();fistSince=null;}}else fistSince=null;
+  }else{pos=null;last=null;pointFrames=0;fistSince=null;}
+
+  c.drawImage(layer,0,0);
+
+  // palette
+  c.fillStyle='rgba(0,0,0,.5)';c.fillRect(0,0,W,84);
+  SW.forEach(s=>{
+    c.beginPath();c.arc(s.x,s.y,s.r,0,7);
+    c.fillStyle=s.col==='eraser'?'#334155':s.col;c.fill();
+    if(s.col==='eraser')text('⌫',s.x,s.y+8,22);
+    if(s.col===color){c.lineWidth=4;c.strokeStyle='#fff';c.stroke();}
+  });
+  // cursor
+  if(pos){c.beginPath();c.arc(pos.x,pos.y,drawing?size/2+3:10,0,7);c.lineWidth=3;c.strokeStyle=color==='eraser'?'#fff':color;c.stroke();}
+  if(fistSince)text('Clearing… '+Math.ceil((1200-(now-fistSince))/400),W/2,H/2,50,'#f87171');
+  if(!lm)text('Show your hand ☝️',W/2,H/2,44);
+  // challenge
+  if(challenge){
+    const left=Math.max(0,Math.ceil((chEnd-now)/1000));
+    text('Draw: '+challenge,W-20,130,32,'#facc15','right');
+    text(left>0?left+'s':"Time's up! 🎉",W-20,170,32,left>0?'#fff':'#4ade80','right');
+  }
+}
+
+async function startCam(id){
+  if(location.protocol==='file:'){err.textContent='Open via start.bat / start.sh, not file://';return;}
+  if(vid.srcObject)vid.srcObject.getTracks().forEach(t=>t.stop());
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({video:id?{deviceId:{exact:id},width:800,height:600}:{width:800,height:600}});
+    vid.srcObject=s;await vid.play();err.textContent='';
+    const devs=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
+    const cur=s.getVideoTracks()[0].getSettings().deviceId;
+    sel.innerHTML=devs.map((d,i)=>`<option value="${d.deviceId}" ${d.deviceId===cur?'selected':''}>${d.label||'Camera '+(i+1)}</option>`).join('');
+    track();
+  }catch(e){err.textContent='Camera error: '+e.name+' — allow access / close other apps using the camera';}
+}
+let running=false;
+async function track(){
+  if(running)return;running=true;
+  const hands=new Hands({locateFile:f=>'mediapipe/'+f});
+  hands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:0.6,minTrackingConfidence:0.5});
+  hands.onResults(onResults);
+  const tick=async()=>{
+    if(vid.readyState>=2){try{await hands.send({image:vid});}catch(e){err.textContent='Model error: '+e.message;return;}}
+    requestAnimationFrame(tick);
+  };
+  tick();
+}
+sel.onchange=()=>startCam(sel.value);
+c.fillStyle='#000';c.fillRect(0,0,W,H);text('Starting camera…',W/2,H/2,40);
+startCam();
+</script></body></html>
